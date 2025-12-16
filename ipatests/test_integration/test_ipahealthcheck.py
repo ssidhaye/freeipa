@@ -160,6 +160,42 @@ TOMCAT_CONFIG_FILES = (
     paths.CA_CS_CFG_PATH,
 )
 
+def execute_expiring_check(master, check):
+    """
+    Test that certmonger will report warnings if expiration is near.
+    This is a helper function that can be used by multiple test classes.
+    """
+    returncode, data = run_healthcheck(
+        master,
+        "ipahealthcheck.ipa.certs",
+        check,
+    )
+
+    assert returncode == 1
+    assert len(data) == 12  # KRA is 12 tracked certs
+
+    for item in data:
+        if item["result"] == "SUCCESS":
+            # The CA is not expired
+            request = master.run_command(
+                ["getcert", "list", "-i", item["kw"]["key"]]
+            )
+            assert "caSigningCert cert-pki-ca" in request.stdout_text
+        else:
+            assert item["result"] == "WARNING"
+            if item["kw"]["days"] == 21:
+                # the httpd, 389-ds and KDC renewal dates are later
+                certs = (paths.HTTPD_CERT_FILE, paths.KDC_CERT,
+                         '/etc/dirsrv/slapd-',)
+                request = master.run_command(
+                    ["getcert", "list", "-i", item["kw"]["key"]]
+                )
+                assert any(cert in request.stdout_text
+                           for cert in certs)
+            else:
+                assert item["kw"]["days"] == 10
+
+
 def run_healthcheck(host, source=None, check=None, output_type="json",
                     failures_only=False, config=None):
     """
@@ -1635,41 +1671,6 @@ class TestIpaHealthCheck(IntegrationTest):
                 assert "Expiring Certificate" in check["kw"]["items"]
                 assert check["kw"]["msg"] == msg
 
-        def execute_expiring_check(check):
-            """
-            Test that certmonger will report warnings if expiration is near
-            """
-
-            returncode, data = run_healthcheck(
-                self.master,
-                "ipahealthcheck.ipa.certs",
-                check,
-            )
-
-            assert returncode == 1
-            assert len(data) == 12  # KRA is 12 tracked certs
-
-            for check in data:
-                if check["result"] == "SUCCESS":
-                    # The CA is not expired
-                    request = self.master.run_command(
-                        ["getcert", "list", "-i", check["kw"]["key"]]
-                    )
-                    assert "caSigningCert cert-pki-ca" in request.stdout_text
-                else:
-                    assert check["result"] == "WARNING"
-                    if check["kw"]["days"] == 21:
-                        # the httpd, 389-ds and KDC renewal dates are later
-                        certs = (paths.HTTPD_CERT_FILE, paths.KDC_CERT,
-                                 '/etc/dirsrv/slapd-',)
-                        request = self.master.run_command(
-                            ["getcert", "list", "-i", check["kw"]["key"]]
-                        )
-                        assert any(cert in request.stdout_text
-                                   for cert in certs)
-                    else:
-                        assert check["kw"]["days"] == 10
-
         # Remove the replica now since it will be out of sync with the
         # updated certificates and replication will break.
         tasks.uninstall_replica(self.master, self.replicas[0])
@@ -1703,7 +1704,7 @@ class TestIpaHealthCheck(IntegrationTest):
 
             for check in ("IPACertmongerExpirationCheck",
                           "IPACertfileExpirationCheck",):
-                execute_expiring_check(check)
+                execute_expiring_check(self.master, check)
 
             execute_nsscheck_cert_expiring(check)
 
@@ -3094,6 +3095,47 @@ class TestIpaHealthCheckWithExternalCA(IntegrationTest):
             else:
                 assert error_reason in check["kw"]["msg"]
 
+
+    def test_ipahealthcheck_expiring_certs(self):
+        """
+        Test to check healthcheck reports externally Signed CA certs
+        with the message `This is not an IPA-issued cert`
+        """
+        tasks.uninstall_replica(self.master, self.replicas[0])
+
+        # Store the current date to restore at the end of the test
+        now = datetime.now(tz=UTC)
+        now_str = datetime.strftime(now, "%Y-%m-%d %H:%M:%S Z")
+
+        # Pick a cert to find the upcoming expiration
+        certfile = self.master.get_file_contents(paths.RA_AGENT_PEM)
+        
+
+        # Stop chronyd so it doesn't freak out with time so off
+        restart_service(self.master, 'chronyd')
+
+        # Stop pki_tomcatd so certs are not renewable. Don't restart
+        # it because by the time the test is done the server is gone.
+        self.master.run_command(
+            ["systemctl", "stop", "pki-tomcatd@pki-tomcat"]
+        )
+
+        try:
+            # move date to the grace period
+            grace_date = cert_expiry - timedelta(days=10)
+            grace_date = datetime.strftime(grace_date, "%Y-%m-%d 00:00:01 Z")
+            self.master.run_command(['date', '-s', grace_date])
+
+            # Restart dirsrv as it doesn't like time jumps
+            instance = realm_to_serverid(self.master.domain.realm)
+            cmd = ["systemctl", "restart", "dirsrv@{}".format(instance)]
+            self.master.run_command(cmd)
+
+            for check in ("IPACertmongerExpirationCheck",
+                          "IPACertfileExpirationCheck",):
+                execute_expiring_check(self.master, check)
+        finally:
+            pass
 
 class TestIpaHealthCheckSingleMaster(IntegrationTest):
 
