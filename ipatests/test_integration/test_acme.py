@@ -91,7 +91,11 @@ def prepare_acme_client(master, client):
 
     # install acme client packages
     if not skip_certbot_tests:
-        tasks.install_packages(client, ['certbot'])
+        platform = tasks.get_platform(client)
+        if platform == 'rhel':
+            pass
+        elif platform == 'fedora':
+            tasks.install_packages(client, ['certbot'])
     if not skip_mod_md_tests:
         tasks.install_packages(client, ['mod_md'])
 
