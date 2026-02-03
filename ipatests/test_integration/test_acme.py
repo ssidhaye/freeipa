@@ -726,7 +726,7 @@ class TestACMEPrune(IntegrationTest):
 
         cs_cfg = self.master.get_file_contents(paths.CA_CS_CFG_PATH)
         assert "jobsScheduler.enabled=true".encode() in cs_cfg
-        assert "jobsScheduler.job.pruning.enabled=true".encode() in cs_cfg
+        assert "jobsScheduler.job.pruning.enabled=true".encode() not in cs_cfg
         assert "jobsScheduler.job.pruning.owner=ipara".encode() in cs_cfg
 
     def test_pruning_options(self):
