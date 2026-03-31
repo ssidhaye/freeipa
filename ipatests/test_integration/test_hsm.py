@@ -990,17 +990,21 @@ class TestHSMACME(CALessBase):
         # Enable pkiuser to read softhsm tokens
         cls.master.run_command(['usermod', 'pkiuser', '-a', '-G', 'ods'])
 
-        cls.token_name, cls.token_password = get_hsm_token(cls.master)
-        tasks.install_master(
-            cls.master, setup_dns=True,
-            extra_args=(
-                '--token-name', cls.token_name,
-                '--token-library-path', hsm_lib_path,
-                '--token-password', cls.token_password
+        try:
+            cls.token_name, cls.token_password = get_hsm_token(cls.master)
+            tasks.install_master(
+                cls.master, setup_dns=True,
+                extra_args=(
+                    '--token-name', cls.token_name,
+                    '--token-library-path', hsm_lib_path,
+                    '--token-password', cls.token_password
+                )
             )
-        )
 
-        tasks.install_client(cls.master, cls.clients[0])
+            tasks.install_client(cls.master, cls.clients[0])
+        except Exception:
+            cls.uninstall(mh)
+            raise
 
     @classmethod
     def uninstall(cls, mh):
