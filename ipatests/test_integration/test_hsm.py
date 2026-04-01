@@ -985,7 +985,7 @@ class TestHSMACME(CALessBase):
         super(TestHSMACME, cls).install(mh)
 
         # install packages before client install in case of IPA DNS problems
-        cls.acme_server = prepare_acme_client(cls.master, cls.clients[0])
+        #cls.acme_server = prepare_acme_client(cls.master, cls.clients[0])
 
         # Enable pkiuser to read softhsm tokens
         cls.master.run_command(['usermod', 'pkiuser', '-a', '-G', 'ods'])
