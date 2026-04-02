@@ -327,6 +327,95 @@ class TestACME(CALessBase):
         ])
 
     ##############
+    # ECDSA tests
+    ##############
+
+    @pytest.mark.skipif(skip_certbot_tests, reason='certbot not available')
+    def test_certbot_certonly_standalone_ecdsa(self):
+        """Test ACME cert issuance with an ECDSA subject key.
+
+        Verifies that the acmeIPAServerCert profile accepts EC keys
+        (nistp384 / secp384r1) end-to-end via certbot standalone HTTP-01.
+
+        related: https://pagure.io/freeipa/issue/9760
+        """
+        self.clients[0].run_command(['systemctl', 'stop', 'httpd'])
+        self.clients[0].run_command(
+            [
+                'certbot',
+                '--server', self.acme_server,
+                'certonly',
+                '--domain', self.clients[0].hostname,
+                '--standalone',
+                '--key-type', 'ecdsa',
+                '--elliptic-curve', 'secp384r1',
+                '--force-renewal',
+            ]
+        )
+
+        cert_path = (
+            f'/etc/letsencrypt/live/{self.clients[0].hostname}/cert.pem'
+        )
+        result = self.clients[0].run_command(
+            ['openssl', 'x509', '-in', cert_path, '-noout', '-text']
+        )
+        assert 'id-ecPublicKey' in result.stdout_text
+
+        self.clients[0].run_command(['systemctl', 'start', 'httpd'])
+
+    def test_ipa_cert_request_ecdsa(self):
+        """Test caIPAserviceCert profile with an ECDSA subject key.
+
+        Generates an EC P-384 CSR and requests a certificate via
+        ipa cert-request, exercising the caIPAserviceCert profile key
+        constraint that must accept nistp384.
+
+        related: https://pagure.io/freeipa/issue/9760
+        """
+        service_name = f'testecdsa/{self.master.hostname}'
+        csr_file = '/tmp/ecdsa_test.csr'
+        key_file = '/tmp/ecdsa_test.key'
+        cert_file = '/tmp/ecdsa_test.pem'
+
+        self.master.run_command(['ipa', 'service-add', service_name])
+
+        self.master.run_command(
+            [
+                'openssl', 'ecparam', '-name', 'secp384r1',
+                '-genkey', '-noout', '-out', key_file,
+            ]
+        )
+        self.master.run_command(
+            [
+                'openssl', 'req', '-new',
+                '-key', key_file,
+                '-out', csr_file,
+                '-subj', f'/CN={self.master.hostname}',
+            ]
+        )
+
+        self.master.run_command(
+            [
+                'ipa', 'cert-request',
+                '--principal', service_name,
+                '--certificate-out', cert_file,
+                csr_file,
+            ]
+        )
+
+        result = self.master.run_command(
+            ['openssl', 'x509', '-in', cert_file, '-noout', '-text']
+        )
+        assert 'id-ecPublicKey' in result.stdout_text
+
+        self.master.run_command(
+            ['ipa', 'service-del', service_name], raiseonerr=False
+        )
+        self.master.run_command(
+            ['rm', '-f', csr_file, key_file, cert_file]
+        )
+
+    ##############
     # mod_md tests
     ##############
 
