@@ -190,10 +190,17 @@ class BaseHSMTest(IntegrationTest):
 
     @classmethod
     def uninstall(cls, mh):
-        check_version(cls.master)
-        super(BaseHSMTest, cls).uninstall(mh)
-        delete_hsm_token([cls.master] + cls.replicas, cls.token_name)
-
+        try:
+            check_version(cls.master)
+            super(BaseHSMTest, cls).uninstall(mh)
+            delete_hsm_token([cls.master] + cls.replicas, cls.token_name)
+        except Exception as e:
+            print(f"Error uninstalling HSM test: {e}")
+            print("Cleaning up...")
+            tasks.service_control_dirsrv(cls.master, function='stop')
+            dirsrv_instance = realm_to_serverid(cls.master.domain.realm)
+            cls.master.run_command(['dsctl', dirsrv_instance, 'remove', '--do-it'])
+            raise e
     @classmethod
     def sync_tokens(cls, source, token_name=None):
         """Synchronize non-networked HSM tokens between machines
