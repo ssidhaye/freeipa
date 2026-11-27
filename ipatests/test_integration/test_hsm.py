@@ -725,19 +725,47 @@ class TestHSMcertFixReplica(BaseHSMTest):
 
     @pytest.fixture
     def expire_certs(self):
-        # move system date to expire certs
-        for host in self.master, self.replicas[0]:
-            tasks.move_date(host, 'stop', '+3years+1days')
-            host.run_command(
-                ['ipactl', 'restart', '--ignore-service-failures']
-            )
+        hosts = (self.replicas[0], self.master)
+        date_shifted = []
+        try:
+            # Move system date to expire certs.
+            for host in self.master, self.replicas[0]:
+                tasks.move_date(host, 'stop', '+3years+1days')
+                date_shifted.append(host)
+                host.run_command(
+                    ['ipactl', 'restart', '--ignore-service-failures']
+                )
 
-        yield
+            yield
+        finally:
+            cleanup_errors = []
+            for host in hosts:
+                # Stop certmonger and remove its requests before uninstalling,
+                # so expired certificates do not interfere with cleanup.
+                for cleanup in (
+                    lambda: host.run_command(
+                        ['systemctl', 'stop', 'certmonger'],
+                        raiseonerr=False,
+                    ),
+                    lambda: host.run_command(
+                        'rm -fv ' + paths.CERTMONGER_REQUESTS_DIR + '*',
+                        raiseonerr=False,
+                    ),
+                    lambda: tasks.uninstall_master(host),
+                ):
+                    try:
+                        cleanup()
+                    except Exception as error:
+                        cleanup_errors.append(error)
 
-        # move date back on replica and master
-        for host in self.replicas[0], self.master:
-            tasks.uninstall_master(host)
-            tasks.move_date(host, 'start', '-3years-1days')
+                if host in date_shifted:
+                    try:
+                        tasks.move_date(host, 'start', '-3years-1days')
+                    except Exception as error:
+                        cleanup_errors.append(error)
+
+            if cleanup_errors:
+                raise cleanup_errors[0]
 
     def test_hsm_renew_expired_cert_replica(self, expire_certs):
         check_version(self.master)
